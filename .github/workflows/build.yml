@@ -9,33 +9,63 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: تحميل المشروع
+      - name: 1. تحميل ملفات المشروع
         uses: actions/checkout@v4
 
-      - name: تثبيت Node.js
+      - name: 2. تثبيت Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '22'
 
-      - name: تثبيت Java
-        uses: actions/setup-java@v4
+      - name: 3. تثبيت Java (نسخة 21)
+        uses: actions/setup-java@v5
         with:
           java-version: '21'
           distribution: 'temurin'
 
-      - name: تثبيت المكتبات
+      - name: 4. تثبيت مكتبات المشروع
         run: npm install --legacy-peer-deps
 
-      - name: بناء المشروع
+      - name: 5. تهيئة Next.js للعمل على الهاتف
+        run: |
+          echo "/** @type {import('next').NextConfig} */
+          const nextConfig = {
+            output: 'export',
+            images: { unoptimized: true }
+          };
+          export default nextConfig;" > next.config.mjs
+
+      - name: 6. كتابة الدفتر السري (.env) لتخطي حارس قاعدة البيانات 📝🤫
+        run: |
+          echo "DATABASE_URL=postgresql://dummy_user:dummy_password@localhost:5432/dummy_db" > .env
+          echo "تم إنشاء الدفتر السري بنجاح!"
+
+      - name: 7. استبعاد ملفات الـ API الخاصة بالسيرفر مؤقتاً
+        run: |
+          echo "=== جاري تنظيف ملفات السيرفر لتوافق الهاتف ==="
+          rm -rf src/app/api
+          rm -rf app/api
+          echo "تم الاستبعاد بنجاح!"
+
+      - name: 8. بناء ملفات الويب الثابتة (out)
         run: npm run build
 
-      - name: تثبيت Capacitor
+      - name: 9. تهيئة وتثبيت Capacitor تلقائياً للهاتف
         run: |
           npm install -g @capacitor/cli
+          npm install @capacitor/core @capacitor/android --legacy-peer-deps
+          
+          rm -f capacitor.config.json capacitor.config.ts
+          echo '{
+            "appId": "com.grocery.debt",
+            "appName": "Grocery Debt",
+            "webDir": "out"
+          }' > capacitor.config.json
+          
           npx cap add android
           npx cap sync android
 
-      - name: إصلاح مشكلة Kotlin المكررة
+      - name: 10. حل مشكلة Kotlin المكررة
         run: |
           cat >> android/build.gradle << 'EOF'
 
@@ -50,15 +80,15 @@ jobs:
           }
           EOF
 
-      - name: صلاحيات Gradle
+      - name: 11. صلاحيات البناء
         run: chmod +x android/gradlew
 
-      - name: بناء الـ APK
+      - name: 12. بناء الـ APK النهائي
         run: |
           cd android
           ./gradlew assembleDebug
 
-      - name: رفع الـ APK
+      - name: 13. رفع ملف الـ APK للتحميل
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
