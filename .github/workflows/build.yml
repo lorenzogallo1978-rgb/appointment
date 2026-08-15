@@ -44,7 +44,7 @@ jobs:
           rm -rf src/app/api
           rm -rf app/api
 
-      - name: 8. إنشاء ملفات الـ Layout المساعدة مع تحديد نوع TypeScript 🪄🛠️
+      - name: 8. إنشاء ملفات الـ Layout المساعدة مع إيقاف dynamicParams 🪄🛠️
         run: |
           node -e "
           const fs = require('fs');
@@ -60,8 +60,8 @@ jobs:
                   console.log('تم العثور على مجلد ديناميكي:', fullPath);
                   
                   const layoutPath = path.join(fullPath, 'layout.tsx');
-                  // قمنا بإضافة : { children: any } لإرضاء معلم الـ TypeScript الصارم!
-                  const layoutCode = 'export function generateStaticParams() { return []; }\nexport const dynamicParams = true;\n\nexport default function DynamicLayout({ children }: { children: any }) { return <>{children}</>; }\n';
+                  // قمنا بتغيير dynamicParams إلى false لتوافق الهاتف تماماً!
+                  const layoutCode = 'export function generateStaticParams() { return []; }\nexport const dynamicParams = false;\n\nexport default function DynamicLayout({ children }: { children: any }) { return <>{children}</>; }\n';
                   
                   fs.writeFileSync(layoutPath, layoutCode);
                   console.log('تم إنشاء layout.tsx بنجاح!');
