@@ -45,12 +45,13 @@ jobs:
           rm -rf src/app/api
           rm -rf app/api
 
-      - name: 8. زرع نظام الحفظ أوفلاين مع التحديث التلقائي الفوري ⚡🪄📱
+      - name: 8. زرع قاعدة بيانات الجوال الذكية (Proxy Offline LocalStorage DB) 🪄🎭🤝
         run: |
           node -e "
           const fs = require('fs');
           const path = require('path');
 
+          // أولاً: تمويه الـ Server Actions لدوال وهمية ذكية تدعم الـ FormData والـ Proxy
           function mockServerActions(dir) {
             if (!fs.existsSync(dir)) return;
             const files = fs.readdirSync(dir);
@@ -71,6 +72,19 @@ jobs:
                   mockContent += typeDefinitions + '\n\n';
                   
                   mockContent += \`
+                  // دالة لترجمة مظاريف الـ FormData بأمان
+                  function parseInput(data) {
+                    if (!data) return {};
+                    if (typeof data.get === 'function') {
+                      const obj = {};
+                      data.forEach((value, key) => {
+                        obj[key] = value;
+                      });
+                      return obj;
+                    }
+                    return data;
+                  }
+
                   function getLocalDB() {
                     if (typeof window === 'undefined') return { persons: [] };
                     try {
@@ -91,20 +105,16 @@ jobs:
                     } catch (e) {}
                   }
 
+                  // استخدام الـ JS Proxy السحري لمحاكاة المصفوفات الحقيقية 100%
                   function createSmartResponse(dataArray) {
-                    const obj = {
-                      success: true,
-                      data: dataArray,
-                      map: (cb) => dataArray.map(cb),
-                      filter: (cb) => dataArray.filter(cb),
-                      forEach: (cb) => dataArray.forEach(cb),
-                      find: (cb) => dataArray.find(cb),
-                      findIndex: (cb) => dataArray.findIndex(cb),
-                      reduce: (cb, init) => dataArray.reduce(cb, init),
-                      length: dataArray.length,
-                      [Symbol.iterator]() { return dataArray[Symbol.iterator](); }
-                    };
-                    return obj;
+                    const arr = Array.isArray(dataArray) ? dataArray : [];
+                    return new Proxy(arr, {
+                      get(target, prop) {
+                        if (prop === 'success') return true;
+                        if (prop === 'data') return target;
+                        return target[prop];
+                      }
+                    });
                   }
 
                   export async function getPersons() {
@@ -118,7 +128,8 @@ jobs:
                     return createSmartResponse(person || { id: String(id), name: 'مستخدم تجريبي', phone: '', debts: [], createdAt: new Date() });
                   }
 
-                  export async function createPerson(data) {
+                  export async function createPerson(rawInput) {
+                    const data = parseInput(rawInput);
                     const db = getLocalDB();
                     if (!db.persons) db.persons = [];
                     const newPerson = {
@@ -134,7 +145,8 @@ jobs:
                     return { success: true, data: newPerson };
                   }
 
-                  export async function updatePerson(id, data) {
+                  export async function updatePerson(id, rawInput) {
+                    const data = parseInput(rawInput);
                     const db = getLocalDB();
                     if (!db.persons) db.persons = [];
                     const idx = db.persons.findIndex(p => String(p.id) === String(id));
@@ -153,7 +165,8 @@ jobs:
                     return { success: true };
                   }
 
-                  export async function createDebt(personId, data) {
+                  export async function createDebt(personId, rawInput) {
+                    const data = parseInput(rawInput);
                     const db = getLocalDB();
                     const idx = db.persons.findIndex(p => String(p.id) === String(personId));
                     if (idx !== -1) {
@@ -193,31 +206,42 @@ jobs:
             });
           }
 
-          function patchDynamicPages(dir) {
+          // ثانياً: تهيئة شاشات الهاتف بالكامل لتفعيل التحديث التلقائي الفوري محلياً
+          function patchAllPages(dir) {
             if (!fs.existsSync(dir)) return;
             const files = fs.readdirSync(dir);
             files.forEach(file => {
               const fullPath = path.join(dir, file);
               if (fs.statSync(fullPath).isDirectory()) {
-                patchDynamicPages(fullPath);
-              } else if (file.match(/^page\.(tsx|ts|js|jsx)$/)) {
-                if (fullPath.includes('[') && fullPath.includes(']')) {
-                  let content = fs.readFileSync(fullPath, 'utf8');
-                  const dirName = path.basename(path.dirname(fullPath));
-                  const paramMatch = dirName.match(/\[([^\]]+)\]/);
-                  const paramName = paramMatch ? paramMatch[1] : 'id';
+                // إذا وجدنا مجلد ديناميكي [id] نقوم بعمل تغليف آمن
+                if (file.includes('[') && file.includes(']')) {
+                  console.log('جاري تفعيل شاشة ديناميكية تفاعلية للهاتف:', fullPath);
+                  const pageFile = fs.readdirSync(fullPath).find(f => f.match(/^page\.(tsx|ts|js|jsx)$/));
+                  if (pageFile) {
+                    const pagePath = path.join(fullPath, pageFile);
+                    let content = fs.readFileSync(pagePath, 'utf8');
+                    const paramName = file.replace('[', '').replace(']', '');
 
-                  if (!content.includes('\"use client\"') && !content.includes('\'use client\'')) {
-                    content = '\"use client\";\n' + content;
+                    if (!content.includes('\"use client\"') && !content.includes('\'use client\'')) {
+                      content = '\"use client\";\n' + content;
+                    }
+                    
+                    const clientPagePath = path.join(fullPath, 'ClientPage' + path.extname(pageFile));
+                    fs.writeFileSync(clientPagePath, content);
+
+                    const wrapperCode = '// @ts-nocheck\nimport ClientPage from \"./ClientPage\";\n\nexport function generateStaticParams() {\n  return [{ \'' + paramName + '\': \"1\" }];\n}\nexport const dynamicParams = false;\nexport const dynamic = \"force-static\";\n\nexport default async function Page({ params }: any) {\n  const resolvedParams = await params;\n  return <ClientPage params={resolvedParams} searchParams={Promise.resolve({})} />;\n}\n';
+                    fs.writeFileSync(pagePath, wrapperCode);
                   }
-
-                  const dirPath = path.dirname(fullPath);
-                  const ext = path.extname(file);
-                  const clientPagePath = path.join(dirPath, 'ClientPage' + ext);
-                  fs.writeFileSync(clientPagePath, content);
-
-                  const wrapperCode = '// @ts-nocheck\nimport ClientPage from \"./ClientPage\";\n\nexport function generateStaticParams() {\n  return [{ \'' + paramName + '\': \"1\" }];\n}\nexport const dynamicParams = false;\nexport const dynamic = \"force-static\";\n\nexport default async function Page({ params }: any) {\n  const resolvedParams = await params;\n  return <ClientPage params={resolvedParams} searchParams={Promise.resolve({})} />;\n}\n';
-                  fs.writeFileSync(fullPath, wrapperCode);
+                } else {
+                  patchAllPages(fullPath);
+                }
+              } else if (file.match(/^page\.(tsx|ts|js|jsx)$/)) {
+                // تفعيل التحديث التلقائي للصفحة الرئيسية وكل الصفحات العادية
+                console.log('جاري تحويل الصفحة لهوية تفاعلية (Client Component):', fullPath);
+                let content = fs.readFileSync(fullPath, 'utf8');
+                if (!content.includes('\"use client\"') && !content.includes('\'use client\'')) {
+                  content = '\"use client\";\n' + content;
+                  fs.writeFileSync(fullPath, content);
                 }
               }
             });
@@ -225,8 +249,8 @@ jobs:
 
           mockServerActions('src');
           mockServerActions('app');
-          patchDynamicPages('src');
-          patchDynamicPages('app');
+          patchAllPages('src/app');
+          patchAllPages('app');
           "
 
       - name: 9. بناء ملفات الويب الثابتة (out)
@@ -234,13 +258,9 @@ jobs:
 
       - name: 10. تهيئة وتثبيت Capacitor والأندرويد بأمان 📱⚙️
         run: |
-          # 1. مسح أي ملفات إعدادات قديمة للبدء بنظافة
           rm -f capacitor.config.json capacitor.config.ts
-          
-          # 2. تثبيت الحزم المطلوبة محلياً داخل السيرفر
           npm install @capacitor/core @capacitor/android @capacitor/cli --save-dev --legacy-peer-deps
           
-          # 3. كتابة ملف الإعدادات بطريقة التغطية الآمنة 100% لمنع الفقدان
           cat << 'EOF' > capacitor.config.json
           {
             "appId": "com.grocery.debt",
@@ -249,7 +269,6 @@ jobs:
           }
           EOF
           
-          # 4. بناء منصة الأندرويد ومزامنتها بملفات الـ out
           npx cap add android
           npx cap sync android
 
