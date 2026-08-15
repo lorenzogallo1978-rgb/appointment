@@ -50,7 +50,7 @@ jobs:
           const fs = require('fs');
           const path = require('path');
 
-          // 1. تحويل ملفات الـ Server Actions لدوال وهمية صديقة للهاتف لعدم وجود سيرفر
+          // 1. تحويل ملفات الـ Server Actions لدوال وهمية مع إغلاق الفحص تماماً
           function mockServerActions(dir) {
             if (!fs.existsSync(dir)) return;
             const files = fs.readdirSync(dir);
@@ -64,16 +64,16 @@ jobs:
                   console.log('تم العثور على ملف Server Action للتمويه:', fullPath);
                   const exports = [];
                   
-                  // استخراج أسماء الدوال المصدرة لتوليد دوال وهمية بنفس الاسم
                   const funcMatches = content.matchAll(/export\s+(async\s+)?function\s+(\w+)/g);
                   for (const m of funcMatches) { exports.push(m[2]); }
                   const constMatches = content.matchAll(/export\s+const\s+(\w+)/g);
                   for (const m of constMatches) { exports.push(m[1]); }
 
-                  let mockContent = '// تم تحويل الملف للعمل على الهاتف أوفلاين\n';
+                  // أضفنا تعويذة @ts-nocheck لتخطي فحص TypeScript بالكامل لهذه الملفات الوهمية
+                  let mockContent = '// @ts-nocheck\n// تم تحويل الملف للعمل على الهاتف أوفلاين\n';
                   const uniqueExports = [...new Set(exports)];
                   uniqueExports.forEach(name => {
-                    mockContent += 'export async function ' + name + '(...args) { console.log(\"Mocked ' + name + ' called\"); return { success: true, data: [] }; }\n';
+                    mockContent += 'export async function ' + name + '(...args: any[]) { console.log(\"Mocked ' + name + ' called\"); return { success: true, data: [] }; }\n';
                   });
                   if (uniqueExports.length === 0) {
                     mockContent += 'export default async function defaultMock() { return { success: true }; }\n';
