@@ -35,22 +35,46 @@ jobs:
           };
           export default nextConfig;" > next.config.mjs
 
-      - name: 6. كتابة الدفتر السري (.env) لتخطي حارس قاعدة البيانات 📝🤫
+      - name: 6. كتابة الدفتر السري (.env)
         run: |
           echo "DATABASE_URL=postgresql://dummy_user:dummy_password@localhost:5432/dummy_db" > .env
-          echo "تم إنشاء الدفتر السري بنجاح!"
 
       - name: 7. استبعاد ملفات الـ API الخاصة بالسيرفر مؤقتاً
         run: |
-          echo "=== جاري تنظيف ملفات السيرفر لتوافق الهاتف ==="
           rm -rf src/app/api
           rm -rf app/api
-          echo "تم الاستبعاد بنجاح!"
 
-      - name: 8. بناء ملفات الويب الثابتة (out)
+      - name: 8. حل مشكلة الصفحات الديناميكية للهاتف تلقائياً 🪄🛠️
+        run: |
+          node -e "
+          const fs = require('fs');
+          const path = require('path');
+
+          function patchPages(dir) {
+            if (!fs.existsSync(dir)) return;
+            const files = fs.readdirSync(dir);
+            files.forEach(file => {
+              const fullPath = path.join(dir, file);
+              if (fs.statSync(fullPath).isDirectory()) {
+                patchPages(fullPath);
+              } else if (file.match(/^page\.(tsx|ts|js|jsx)$/)) {
+                if (fullPath.includes('[') && fullPath.includes(']')) {
+                  console.log('تم العثور على صفحة ديناميكية لتعديلها:', fullPath);
+                  const patchCode = '\nexport function generateStaticParams() { return []; }\nexport const dynamicParams = true;\n';
+                  fs.appendFileSync(fullPath, patchCode);
+                }
+              }
+            });
+          }
+
+          patchPages('src/app');
+          patchPages('app');
+          "
+
+      - name: 9. بناء ملفات الويب الثابتة (out)
         run: npm run build
 
-      - name: 9. تهيئة وتثبيت Capacitor تلقائياً للهاتف
+      - name: 10. تهيئة وتثبيت Capacitor تلقائياً للهاتف
         run: |
           npm install -g @capacitor/cli
           npm install @capacitor/core @capacitor/android --legacy-peer-deps
@@ -65,7 +89,7 @@ jobs:
           npx cap add android
           npx cap sync android
 
-      - name: 10. حل مشكلة Kotlin المكررة
+      - name: 11. حل مشكلة Kotlin المكررة
         run: |
           cat >> android/build.gradle << 'EOF'
 
@@ -80,15 +104,15 @@ jobs:
           }
           EOF
 
-      - name: 11. صلاحيات البناء
+      - name: 12. صلاحيات البناء
         run: chmod +x android/gradlew
 
-      - name: 12. بناء الـ APK النهائي
+      - name: 13. بناء الـ APK النهائي
         run: |
           cd android
           ./gradlew assembleDebug
 
-      - name: 13. رفع ملف الـ APK للتحميل
+      - name: 14. رفع ملف الـ APK للتحميل
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
