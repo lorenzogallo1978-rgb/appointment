@@ -44,31 +44,37 @@ jobs:
           rm -rf src/app/api
           rm -rf app/api
 
-      - name: 8. حل مشكلة الصفحات الديناميكية للهاتف تلقائياً 🪄🛠️
+      - name: 8. إنشاء ملفات الـ Layout المساعدة للصفحات الديناميكية تلقائياً 🪄🛠️
         run: |
           node -e "
           const fs = require('fs');
           const path = require('path');
 
-          function patchPages(dir) {
+          function patchDynamicRoutes(dir) {
             if (!fs.existsSync(dir)) return;
             const files = fs.readdirSync(dir);
             files.forEach(file => {
               const fullPath = path.join(dir, file);
               if (fs.statSync(fullPath).isDirectory()) {
-                patchPages(fullPath);
-              } else if (file.match(/^page\.(tsx|ts|js|jsx)$/)) {
-                if (fullPath.includes('[') && fullPath.includes(']')) {
-                  console.log('تم العثور على صفحة ديناميكية لتعديلها:', fullPath);
-                  const patchCode = '\nexport function generateStaticParams() { return []; }\nexport const dynamicParams = true;\n';
-                  fs.appendFileSync(fullPath, patchCode);
+                // إذا وجدنا مجلد ديناميكي مثل [id]
+                if (file.includes('[') && file.includes(']')) {
+                  console.log('تم العثور على مجلد ديناميكي:', fullPath);
+                  
+                  // نصنع ملف layout.tsx المساعد بداخله ليحمل الدالة بدلاً من صفحة الـ use client
+                  const layoutPath = path.join(fullPath, 'layout.tsx');
+                  const layoutCode = 'export function generateStaticParams() { return []; }\nexport const dynamicParams = true;\n\nexport default function DynamicLayout({ children }) { return <>{children}</>; }\n';
+                  
+                  fs.writeFileSync(layoutPath, layoutCode);
+                  console.log('تم إنشاء layout.tsx المساعد بنجاح في:', fullPath);
                 }
+                // ابحث في المجلدات الفرعية أيضاً
+                patchDynamicRoutes(fullPath);
               }
             });
           }
 
-          patchPages('src/app');
-          patchPages('app');
+          patchDynamicRoutes('src/app');
+          patchDynamicRoutes('app');
           "
 
       - name: 9. بناء ملفات الويب الثابتة (out)
