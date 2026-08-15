@@ -2,515 +2,573 @@ name: Build APK
 
 on:
   push:
-    branches: [ main, master ]
-  workflow_dispatch:
+    branches: [ main ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: 1. تحميل ملفات المشروع
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: 2. تثبيت Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22'
 
-      - name: Setup Java JDK
+      - name: 3. تثبيت Java
         uses: actions/setup-java@v5
         with:
           java-version: '21'
           distribution: 'temurin'
 
-      - name: Install Dependencies
+      - name: 4. تثبيت مكتبات المشروع
         run: npm install --legacy-peer-deps
 
-      # إنشاء ملفات البيئة
-      - name: إنشاء ملفات البيئة (.env)
+      - name: 5. إعداد Next.js للتطبيق
         run: |
-          echo 'DATABASE_URL="postgresql://postgres:postgres@localhost:5432/grocery_db"' > .env
-          echo 'DATABASE_URL="postgresql://postgres:postgres@localhost:5432/grocery_db"' > .env.local
-          echo 'DATABASE_URL="postgresql://postgres:postgres@localhost:5432/grocery_db"' > .env.production
-
-      # إعدادات Next.js مع تفعيل trailingSlash للتنقل السلس داخل أندرويد
-      - name: ضبط إعدادات Next.js
-        run: |
-          rm -f next.config.ts next.config.js
-          cat << 'EOF' > next.config.mjs
+          cat > next.config.mjs <<'EOF'
           /** @type {import('next').NextConfig} */
           const nextConfig = {
             output: 'export',
             trailingSlash: true,
             images: { unoptimized: true },
-            typescript: { ignoreBuildErrors: true },
-            experimental: {
-              missingSuspenseWithCSRBailout: false,
-            },
+            typescript: { ignoreBuildErrors: true }
           };
+
           export default nextConfig;
           EOF
 
-      # استبعاد كود API السيرفر
-      - name: تجهيز الواجهات
+      - name: 6. ملف قاعدة بيانات وهمي
         run: |
-          if [ -d "src/app/api" ]; then
-            mv src/app/api ./_api_backup
-          fi
+          echo "DATABASE_URL=postgresql://dummy_user:dummy_password@localhost:5432/dummy_db" > .env
 
-      # تفعيل محرك قاعدة البيانات ومعالجة فك تشفير ID والتنقل الفوري
-      - name: تفعيل التنقل وتفاصيل العملاء والتعديل الفوري
+      - name: 7. حذف API لأنها لا تعمل داخل APK
         run: |
-          node -e "
-          const fs = require('fs');
-          const path = require('path');
+          rm -rf src/app/api
+          rm -rf app/api
 
-          function getAllFiles(dirPath, arrayOfFiles) {
-            if (!fs.existsSync(dirPath)) return arrayOfFiles || [];
-            const files = fs.readdirSync(dirPath);
-            arrayOfFiles = arrayOfFiles || [];
-            files.forEach(function(file) {
-              const fullPath = path.join(dirPath, file);
-              if (fs.statSync(fullPath).isDirectory()) {
-                arrayOfFiles = getAllFiles(fullPath, arrayOfFiles);
-              } else {
-                arrayOfFiles.push(fullPath);
-              }
-            });
-            return arrayOfFiles;
-          }
+      - name: 8. تجهيز التطبيق للعمل أوفلاين داخل الجوال
+        run: |
+          cat > mobile-patch.cjs <<'EOF'
+          const fs = require("fs");
+          const path = require("path");
 
-          const srcDir = path.join(process.cwd(), 'src');
-          if (fs.existsSync(srcDir)) {
-            const allSrcFiles = getAllFiles(srcDir);
-
-            // 1. تنظيف use server
-            allSrcFiles.forEach(file => {
-              if (/\.(tsx|jsx|ts|js|mjs)$/.test(file)) {
-                let content = fs.readFileSync(file, 'utf8');
-                if (/(['\"])use server\1/i.test(content)) {
-                  content = content.replace(/(['\"])use server\1;?/gi, '// converted to offline storage');
-                  fs.writeFileSync(file, content, 'utf8');
-                }
-              }
-            });
-
-            // 2. محرك قاعدة البيانات المحلي الفوري (LocalStorage Real-Time Engine)
-            const fullLocalDbEngine = \`// @ts-nocheck
-          /* eslint-disable */
-
-          const PERSONS_KEY = 'grocery_app_persons_v5';
-          const DEBTS_KEY = 'grocery_app_debts_v5';
-
-          const INITIAL_PERSONS = [
-            { id: '1', name: 'أحمد محمود', phone: '01012345678', notes: 'عميل منتظم', createdAt: new Date().toISOString() },
-            { id: '2', name: 'محمد علي', phone: '01198765432', notes: 'حساب البقالة الأسبوعي', createdAt: new Date().toISOString() }
-          ];
-
-          const INITIAL_DEBTS = [
-            { id: '101', personId: '1', amount: 150, description: 'أرز وزيت وسكر', date: new Date().toISOString(), dueDate: new Date().toISOString(), isPaid: false, createdAt: new Date().toISOString() },
-            { id: '102', personId: '2', amount: 85, description: 'ألبان واجبان', date: new Date().toISOString(), dueDate: new Date().toISOString(), isPaid: false, createdAt: new Date().toISOString() }
-          ];
-
-          function notifyChange() {
-            if (typeof window !== 'undefined') {
-              window.dispatchEvent(new Event('storage'));
-              window.dispatchEvent(new CustomEvent('grocery_db_updated'));
+          function walk(dir, cb) {
+            if (!fs.existsSync(dir)) return;
+            for (const item of fs.readdirSync(dir)) {
+              const full = path.join(dir, item);
+              const stat = fs.statSync(full);
+              if (stat.isDirectory()) walk(full, cb);
+              else cb(full);
             }
           }
 
-          function getStorage(key, defaultVal) {
-            if (typeof window === 'undefined') return defaultVal;
-            try {
-              const data = localStorage.getItem(key);
-              if (!data) {
-                localStorage.setItem(key, JSON.stringify(defaultVal));
-                return defaultVal;
+          function mockServerActions(root) {
+            walk(root, (file) => {
+              if (!file.match(/\.(ts|tsx|js|jsx)$/)) return;
+
+              const original = fs.readFileSync(file, "utf8");
+
+              if (!original.includes('"use server"') && !original.includes("'use server'")) {
+                return;
               }
-              return JSON.parse(data);
+
+              console.log("تحويل Server Action إلى LocalStorage:", file);
+
+              const typeNames = new Set();
+              for (const m of original.matchAll(/export\s+(?:type|interface)\s+(\w+)/g)) {
+                typeNames.add(m[1]);
+              }
+
+              const exportNames = new Set();
+
+              for (const m of original.matchAll(/export\s+(?:async\s+)?function\s+(\w+)/g)) {
+                exportNames.add(m[1]);
+              }
+
+              for (const m of original.matchAll(/export\s+const\s+(\w+)/g)) {
+                exportNames.add(m[1]);
+              }
+
+              const known = [
+                "getPersons",
+                "getPerson",
+                "createPerson",
+                "updatePerson",
+                "deletePerson",
+                "createDebt",
+                "addDebt",
+                "updateDebt",
+                "deleteDebt",
+                "getDebts",
+                "getPasswords",
+                "createPassword",
+                "deletePassword",
+                "exportData",
+                "importData"
+              ];
+
+              for (const name of known) exportNames.add(name);
+
+              let code = `// @ts-nocheck
+          // هذا الملف تم تحويله ليعمل أوفلاين داخل تطبيق Android
+
+          `;
+
+              for (const name of typeNames) {
+                code += `export type ${name} = any;\n`;
+                code += `export const ${name} = {};\n`;
+              }
+
+              code += `
+
+          function parseInput(input) {
+            if (!input) return {};
+            if (typeof input.get === "function") {
+              const obj = {};
+              input.forEach((value, key) => {
+                obj[key] = value;
+              });
+              return obj;
+            }
+            return input;
+          }
+
+          function getDB() {
+            if (typeof window === "undefined") return { persons: [] };
+            try {
+              const raw = localStorage.getItem("grocery_offline_db");
+              return raw ? JSON.parse(raw) : { persons: [] };
             } catch (e) {
-              return defaultVal;
+              return { persons: [] };
             }
           }
 
-          function setStorage(key, val) {
-            if (typeof window === 'undefined') return;
-            try {
-              localStorage.setItem(key, JSON.stringify(val));
-              notifyChange();
-            } catch (e) {
-              console.error(e);
-            }
-          }
-
-          function getNextId(items) {
-            if (!items || items.length === 0) return '1';
-            const nums = items.map(i => parseInt(i.id, 10)).filter(n => !isNaN(n));
-            if (nums.length === 0) return '1';
-            return String(Math.max(...nums) + 1);
-          }
-
-          function cleanId(rawId: any) {
-            if (!rawId) return '1';
-            if (typeof rawId === 'object') {
-              return String(rawId.id || rawId.params?.id || '1');
-            }
-            return String(rawId);
-          }
-
-          export type Person = any;
-          export const Person = {} as any;
-          export type Debt = any;
-          export const Debt = {} as any;
-          export type Transaction = any;
-          export const Transaction = {} as any;
-
-          export async function getPersons() {
-            const persons = getStorage(PERSONS_KEY, INITIAL_PERSONS);
-            const debts = getStorage(DEBTS_KEY, INITIAL_DEBTS);
-
-            return persons.map((p: any) => {
-              const pDebts = debts.filter((d: any) => String(d.personId) === String(p.id));
-              const totalDebt = pDebts.reduce((sum: number, d: any) => d.isPaid ? sum : sum + (Number(d.amount) || 0), 0);
-              return {
-                ...p,
-                totalDebt,
-                debtsCount: pDebts.length,
-                debts: pDebts,
-              };
-            });
-          }
-
-          export async function getPerson(id: any) {
-            const persons = getStorage(PERSONS_KEY, INITIAL_PERSONS);
-            const debts = getStorage(DEBTS_KEY, INITIAL_DEBTS);
-            const targetId = cleanId(id);
-
-            let person = persons.find((p: any) => String(p.id) === targetId);
-            if (!person) {
-              person = persons[0] || { id: targetId, name: 'عميل #' + targetId, phone: '', notes: '', createdAt: new Date().toISOString() };
-            }
-
-            const pDebts = debts.filter((d: any) => String(d.personId) === String(person.id));
-            const totalDebt = pDebts.reduce((sum: number, d: any) => d.isPaid ? sum : sum + (Number(d.amount) || 0), 0);
-
-            return {
-              ...person,
-              totalDebt,
-              debts: pDebts,
-            };
-          }
-
-          export async function createPerson(formDataOrObj: any) {
-            const persons = getStorage(PERSONS_KEY, INITIAL_PERSONS);
-            let name = 'عميل جديد';
-            let phone = '';
-            let notes = '';
-
-            if (formDataOrObj instanceof FormData || (typeof formDataOrObj?.get === 'function')) {
-              name = formDataOrObj.get('name') || name;
-              phone = formDataOrObj.get('phone') || phone;
-              notes = formDataOrObj.get('notes') || notes;
-            } else if (typeof formDataOrObj === 'object' && formDataOrObj !== null) {
-              name = formDataOrObj.name || name;
-              phone = formDataOrObj.phone || phone;
-              notes = formDataOrObj.notes || notes;
-            }
-
-            const newId = getNextId(persons);
-            const newPerson = {
-              id: newId,
-              name: String(name),
-              phone: String(phone || ''),
-              notes: String(notes || ''),
-              createdAt: new Date().toISOString(),
-            };
-
-            persons.unshift(newPerson);
-            setStorage(PERSONS_KEY, persons);
-
+          function saveDB(db) {
+            if (typeof window === "undefined") return;
+            localStorage.setItem("grocery_offline_db", JSON.stringify(db));
             setTimeout(() => {
-              if (typeof window !== 'undefined') window.location.href = '/';
-            }, 300);
-
-            return { success: true, person: newPerson, id: newId };
+              try {
+                window.location.reload();
+              } catch (e) {}
+            }, 150);
           }
 
-          export async function updatePerson(id: any, data: any) {
-            const persons = getStorage(PERSONS_KEY, INITIAL_PERSONS);
-            const targetId = cleanId(id);
-            const index = persons.findIndex((p: any) => String(p.id) === targetId);
-
-            if (index !== -1) {
-              let name = data?.name || (typeof data?.get === 'function' ? data.get('name') : null);
-              let phone = data?.phone || (typeof data?.get === 'function' ? data.get('phone') : null);
-              let notes = data?.notes || (typeof data?.get === 'function' ? data.get('notes') : null);
-
-              if (name) persons[index].name = String(name);
-              if (phone !== null) persons[index].phone = String(phone);
-              if (notes !== null) persons[index].notes = String(notes);
-
-              setStorage(PERSONS_KEY, persons);
+          function realId(id) {
+            if (typeof window !== "undefined" && String(id) === "1") {
+              return localStorage.getItem("current_person_id") || "1";
             }
-
-            setTimeout(() => {
-              if (typeof window !== 'undefined') window.location.href = '/person/' + targetId + '/';
-            }, 300);
-
-            return { success: true };
+            return String(id);
           }
 
-          export async function deletePerson(id: any) {
-            let persons = getStorage(PERSONS_KEY, INITIAL_PERSONS);
-            let debts = getStorage(DEBTS_KEY, INITIAL_DEBTS);
-            const targetId = cleanId(id);
-
-            persons = persons.filter((p: any) => String(p.id) !== targetId);
-            debts = debts.filter((d: any) => String(d.personId) !== targetId);
-
-            setStorage(PERSONS_KEY, persons);
-            setStorage(DEBTS_KEY, debts);
-
-            setTimeout(() => {
-              if (typeof window !== 'undefined') window.location.href = '/';
-            }, 300);
-
-            return { success: true };
-          }
-
-          export async function addDebt(personIdOrData: any, possibleData?: any) {
-            const debts = getStorage(DEBTS_KEY, INITIAL_DEBTS);
-            let pId = cleanId(personIdOrData);
-            let data = possibleData || {};
-
-            if (typeof personIdOrData === 'object' && personIdOrData !== null) {
-              pId = cleanId(personIdOrData.personId || personIdOrData.id);
-              data = personIdOrData;
-            }
-
-            let amount = 0;
-            let description = 'دين مشتريات';
-            let date = new Date().toISOString();
-
-            if (data instanceof FormData || (typeof data?.get === 'function')) {
-              amount = data.get('amount') || amount;
-              description = data.get('description') || description;
-              date = data.get('date') || date;
-            } else if (typeof data === 'object') {
-              amount = data.amount || amount;
-              description = data.description || description;
-              date = data.date || data.dueDate || date;
-            }
-
-            const newDebt = {
-              id: Date.now().toString(),
-              personId: String(pId || '1'),
-              amount: Number(amount) || 0,
-              description: String(description || ''),
-              date: date,
-              dueDate: date,
-              isPaid: false,
-              createdAt: new Date().toISOString(),
-            };
-
-            debts.unshift(newDebt);
-            setStorage(DEBTS_KEY, debts);
-
-            setTimeout(() => {
-              if (typeof window !== 'undefined') window.location.reload();
-            }, 300);
-
-            return { success: true, debt: newDebt };
-          }
-
-          export async function settleDebt(debtId: any) {
-            const debts = getStorage(DEBTS_KEY, INITIAL_DEBTS);
-            const targetId = String(debtId);
-            const index = debts.findIndex((d: any) => String(d.id) === targetId);
-
-            if (index !== -1) {
-              debts[index].isPaid = true;
-              debts[index].paidAt = new Date().toISOString();
-              setStorage(DEBTS_KEY, debts);
-            }
-
-            setTimeout(() => {
-              if (typeof window !== 'undefined') window.location.reload();
-            }, 300);
-
-            return { success: true };
-          }
-
-          export async function deleteDebt(debtId: any) {
-            let debts = getStorage(DEBTS_KEY, INITIAL_DEBTS);
-            debts = debts.filter((d: any) => String(d.id) !== String(debtId));
-            setStorage(DEBTS_KEY, debts);
-
-            setTimeout(() => {
-              if (typeof window !== 'undefined') window.location.reload();
-            }, 300);
-
-            return { success: true };
-          }
-
-          export async function updateDebt(debtId: any, data: any) {
-            const debts = getStorage(DEBTS_KEY, INITIAL_DEBTS);
-            const targetId = String(debtId);
-            const index = debts.findIndex((d: any) => String(d.id) === targetId);
-            if (index !== -1) {
-              debts[index] = { ...debts[index], ...data };
-              setStorage(DEBTS_KEY, debts);
-            }
-
-            setTimeout(() => {
-              if (typeof window !== 'undefined') window.location.reload();
-            }, 300);
-
-            return { success: true };
-          }
-
-          export async function getDebts(personId?: any) {
-            const debts = getStorage(DEBTS_KEY, INITIAL_DEBTS);
-            if (personId) return debts.filter((d: any) => String(d.personId) === cleanId(personId));
-            return debts;
-          }
-
-          export async function getTransactions(...args: any[]) { return []; }
-
-          export async function exportData() {
-            return JSON.stringify({
-              persons: getStorage(PERSONS_KEY, INITIAL_PERSONS),
-              debts: getStorage(DEBTS_KEY, INITIAL_DEBTS),
-            });
-          }
-
-          export async function importData(jsonString: string) {
-            try {
-              const parsed = JSON.parse(jsonString);
-              if (parsed.persons) setStorage(PERSONS_KEY, parsed.persons);
-              if (parsed.debts) setStorage(DEBTS_KEY, parsed.debts);
-              window.location.reload();
-              return { success: true };
-            } catch (e) {
-              return { success: false };
-            }
-          }
-          \`;
-
-            allSrcFiles.filter(f => /actions\.(ts|js|tsx)$/.test(f)).forEach(file => {
-              fs.writeFileSync(file, fullLocalDbEngine, 'utf8');
-            });
-
-            // 3. إضافة بطاقة المرور
-            allSrcFiles.forEach(file => {
-              if (/\.(tsx|jsx|ts|js)$/.test(file)) {
-                let content = fs.readFileSync(file, 'utf8');
-                content = content.replace(/dynamicParams\s*=\s*true/g, 'dynamicParams = false');
-                content = content.replace(/\(\{\s*children\s*\}\)/g, '({ children }: { children: any })');
-
-                if (!content.startsWith('// @ts-nocheck')) {
-                  content = '// @ts-nocheck\n/* eslint-disable */\n' + content;
-                }
-                fs.writeFileSync(file, content, 'utf8');
-              }
-            });
-
-            // 4. معالجة الصفحات المتغيرة [id] وفك تشفير params
-            const appDir = path.join(srcDir, 'app');
-            if (fs.existsSync(appDir)) {
-              function getDynamicDirs(dir) {
-                let dynamicDirs = [];
-                fs.readdirSync(dir).forEach(f => {
-                  const full = path.join(dir, f);
-                  if (fs.statSync(full).isDirectory()) {
-                    if (f.startsWith('[') && f.endsWith(']')) {
-                      dynamicDirs.push(full);
-                    }
-                    dynamicDirs = dynamicDirs.concat(getDynamicDirs(full));
-                  }
-                });
-                return dynamicDirs;
-              }
-
-              const dynamicDirs = getDynamicDirs(appDir);
-              dynamicDirs.forEach(dir => {
-                const param = path.basename(dir).replace(/\[|\]/g, '');
-                const filesInDir = fs.readdirSync(dir);
-                const pageFile = filesInDir.find(f => /^page\.(tsx|jsx|js|ts)$/.test(f));
-
-                if (pageFile) {
-                  const fullPagePath = path.join(dir, pageFile);
-                  const clientViewPath = path.join(dir, 'ClientView.tsx');
-
-                  let originalContent = fs.readFileSync(fullPagePath, 'utf8');
-                  if (!fs.existsSync(clientViewPath)) {
-                    if (!originalContent.includes('use client')) {
-                      originalContent = \"'use client';\\n\" + originalContent;
-                    }
-                    fs.writeFileSync(clientViewPath, originalContent, 'utf8');
-                  }
-
-                  const wrapperCode = \`// @ts-nocheck
-          /* eslint-disable */
-          import React, { Suspense } from 'react';
-          import ClientView from './ClientView';
-
-          export const dynamic = 'force-static';
-          export const dynamicParams = false;
-
-          export async function generateStaticParams() {
-            // توليد 100 مسار للعملاء من 1 إلى 100
-            return Array.from({ length: 100 }, (_, i) => ({ \${param}: String(i + 1) }));
-          }
-
-          export default async function DynamicPage(props: any) {
-            let resolvedParams = {};
-            try {
-              resolvedParams = props?.params ? await props.params : {};
-            } catch(e) {
-              resolvedParams = props?.params || {};
-            }
-
-            return (
-              <Suspense fallback={<div style={{ padding: '20px', textAlign: 'center' }}>جاري التحميل...</div>}>
-                <ClientView {...props} params={resolvedParams} id={resolvedParams.\${param} || '1'} />
-              </Suspense>
-            );
-          }
-          \`;
-                  fs.writeFileSync(fullPagePath, wrapperCode, 'utf8');
+          function smart(value) {
+            if (Array.isArray(value)) {
+              return new Proxy(value, {
+                get(target, prop) {
+                  if (prop === "success") return true;
+                  if (prop === "data") return target;
+                  return target[prop];
                 }
               });
             }
+
+            if (value && typeof value === "object") {
+              return new Proxy(value, {
+                get(target, prop) {
+                  if (prop === "success") return true;
+                  if (prop === "data") return target;
+                  if (prop === "0") return target;
+                  if (prop === "length") return 1;
+                  return target[prop];
+                }
+              });
+            }
+
+            return { success: true, data: value };
           }
-          "
 
-      - name: Build Web App
+          export async function getPersons() {
+            const db = getDB();
+            return smart(db.persons || []);
+          }
+
+          export async function getPerson(id) {
+            const db = getDB();
+            const id2 = realId(id);
+            const person = (db.persons || []).find(p => String(p.id) === String(id2));
+
+            return smart(person || {
+              id: id2,
+              name: "",
+              phone: "",
+              debts: [],
+              createdAt: new Date().toISOString()
+            });
+          }
+
+          export async function createPerson(input) {
+            const data = parseInput(input);
+            const db = getDB();
+
+            if (!db.persons) db.persons = [];
+
+            const person = {
+              id: Date.now().toString(),
+              name: data.name || data.fullName || "شخص جديد",
+              phone: data.phone || "",
+              debts: [],
+              createdAt: new Date().toISOString(),
+              ...data
+            };
+
+            db.persons.push(person);
+            saveDB(db);
+
+            return { success: true, data: person };
+          }
+
+          export async function updatePerson(id, input) {
+            const data = parseInput(input);
+            const db = getDB();
+            const id2 = realId(id);
+
+            if (!db.persons) db.persons = [];
+
+            const index = db.persons.findIndex(p => String(p.id) === String(id2));
+
+            if (index !== -1) {
+              db.persons[index] = {
+                ...db.persons[index],
+                ...data
+              };
+              saveDB(db);
+              return { success: true, data: db.persons[index] };
+            }
+
+            return { success: false };
+          }
+
+          export async function deletePerson(id) {
+            const db = getDB();
+            const id2 = realId(id);
+
+            if (!db.persons) db.persons = [];
+
+            db.persons = db.persons.filter(p => String(p.id) !== String(id2));
+            saveDB(db);
+
+            return { success: true };
+          }
+
+          export async function createDebt(personId, input) {
+            const data = parseInput(input);
+            const db = getDB();
+            const id2 = realId(personId);
+
+            if (!db.persons) db.persons = [];
+
+            const index = db.persons.findIndex(p => String(p.id) === String(id2));
+
+            if (index !== -1) {
+              if (!db.persons[index].debts) db.persons[index].debts = [];
+
+              const debt = {
+                id: Date.now().toString(),
+                amount: Number(data.amount || data.value || 0),
+                description: data.description || data.note || "",
+                date: data.date || new Date().toISOString(),
+                createdAt: new Date().toISOString(),
+                ...data
+              };
+
+              db.persons[index].debts.push(debt);
+              saveDB(db);
+
+              return { success: true, data: debt };
+            }
+
+            return { success: false };
+          }
+
+          export async function addDebt(...args) {
+            return createDebt(...args);
+          }
+
+          export async function updateDebt(personId, debtId, input) {
+            const data = parseInput(input);
+            const db = getDB();
+            const id2 = realId(personId);
+
+            const person = (db.persons || []).find(p => String(p.id) === String(id2));
+
+            if (person && person.debts) {
+              const index = person.debts.findIndex(d => String(d.id) === String(debtId));
+              if (index !== -1) {
+                person.debts[index] = {
+                  ...person.debts[index],
+                  ...data
+                };
+                saveDB(db);
+                return { success: true, data: person.debts[index] };
+              }
+            }
+
+            return { success: false };
+          }
+
+          export async function deleteDebt(personId, debtId) {
+            const db = getDB();
+            const id2 = realId(personId);
+
+            const person = (db.persons || []).find(p => String(p.id) === String(id2));
+
+            if (person && person.debts) {
+              person.debts = person.debts.filter(d => String(d.id) !== String(debtId));
+              saveDB(db);
+            }
+
+            return { success: true };
+          }
+
+          export async function getDebts(personId) {
+            const person = await getPerson(personId);
+            return smart(person.debts || []);
+          }
+
+          export async function getPasswords() {
+            return smart([]);
+          }
+
+          export async function createPassword() {
+            return { success: true };
+          }
+
+          export async function deletePassword() {
+            return { success: true };
+          }
+
+          export async function exportData() {
+            return getDB();
+          }
+
+          export async function importData(input) {
+            const data = parseInput(input);
+            if (typeof window !== "undefined") {
+              localStorage.setItem("grocery_offline_db", JSON.stringify(data));
+              window.location.reload();
+            }
+            return { success: true };
+          }
+          `;
+
+              for (const name of exportNames) {
+                if (code.includes(`function ${name}(`)) continue;
+                code += `
+          export async function ${name}(...args) {
+            console.log("Offline mock:", "${name}", args);
+            return { success: true, data: null };
+          }
+          `;
+              }
+
+              fs.writeFileSync(file, code);
+            });
+          }
+
+          function patchPages(appDir) {
+            if (!fs.existsSync(appDir)) return;
+
+            walk(appDir, (file) => {
+              if (!file.match(/page\.(tsx|ts|js|jsx)$/)) return;
+
+              const parts = file.split(path.sep);
+              const isDynamic = parts.some(p => p.includes("[") && p.includes("]"));
+
+              if (!isDynamic) {
+                let content = fs.readFileSync(file, "utf8");
+                if (!content.includes('"use client"') && !content.includes("'use client'")) {
+                  content = `"use client";\n` + content;
+                  fs.writeFileSync(file, content);
+                }
+                return;
+              }
+
+              console.log("تجهيز صفحة ديناميكية:", file);
+
+              let content = fs.readFileSync(file, "utf8");
+
+              if (!content.includes('"use client"') && !content.includes("'use client'")) {
+                content = `"use client";\n` + content;
+              }
+
+              const dir = path.dirname(file);
+              const ext = path.extname(file);
+              const clientFile = path.join(dir, "ClientPage" + ext);
+
+              fs.writeFileSync(clientFile, content);
+
+              const dynamicFolder = parts.find(p => p.includes("[") && p.includes("]"));
+              const paramName = dynamicFolder.replace("[", "").replace("]", "") || "id";
+
+              const wrapper = `// @ts-nocheck
+          import ClientPage from "./ClientPage";
+
+          export function generateStaticParams() {
+            return [{ ${paramName}: "1" }];
+          }
+
+          export const dynamicParams = false;
+          export const dynamic = "force-static";
+
+          export default async function Page({ params }) {
+            const resolvedParams = await params;
+            return <ClientPage params={resolvedParams} searchParams={{}} />;
+          }
+          `;
+
+              fs.writeFileSync(file, wrapper);
+            });
+          }
+
+          mockServerActions("src");
+          mockServerActions("app");
+
+          patchPages("src/app");
+          patchPages("app");
+          EOF
+
+          node mobile-patch.cjs
+
+      - name: 9. بناء ملفات Next.js
         run: npm run build
-        env:
-          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/grocery_db"
-          NODE_ENV: "production"
 
-      # إعداد وضبط ملف Capacitor وبناء منصة الأندرويد
-      - name: Setup Capacitor & Android Platform
+      - name: 10. إصلاح روابط التفاصيل والتعديل بعد البناء
         run: |
-          rm -f capacitor.config.ts capacitor.config.js
-          cat << 'EOF' > capacitor.config.json
+          cat > inject-nav.cjs <<'EOF'
+          const fs = require("fs");
+          const path = require("path");
+
+          const script = `
+          <script>
+          (function () {
+            if (window.__groceryRouteFix) return;
+            window.__groceryRouteFix = true;
+
+            function fixUrl(raw) {
+              if (!raw) return null;
+
+              try {
+                var url = new URL(raw, window.location.href);
+                var path = url.pathname;
+
+                var person = path.match(/^\\/person\\/([^\\/]+)\\/?$/);
+                if (person && person[1] !== "1") {
+                  localStorage.setItem("current_person_id", decodeURIComponent(person[1]));
+                  url.pathname = "/person/1/";
+                  return url.href;
+                }
+
+                var edit = path.match(/^\\/edit\\/([^\\/]+)\\/?$/);
+                if (edit && edit[1] !== "1") {
+                  localStorage.setItem("current_person_id", decodeURIComponent(edit[1]));
+                  url.pathname = "/edit/1/";
+                  return url.href;
+                }
+
+                return null;
+              } catch (e) {
+                return null;
+              }
+            }
+
+            document.addEventListener("click", function (e) {
+              var el = e.target;
+
+              while (el && el.tagName !== "A") {
+                el = el.parentNode;
+              }
+
+              if (!el) return;
+
+              var href = el.getAttribute("href");
+              var fixed = fixUrl(href);
+
+              if (fixed) {
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                window.location.href = fixed;
+              }
+            }, true);
+
+            var oldPush = history.pushState;
+            history.pushState = function (state, title, url) {
+              var fixed = fixUrl(url);
+              return oldPush.call(this, state, title, fixed || url);
+            };
+
+            var oldReplace = history.replaceState;
+            history.replaceState = function (state, title, url) {
+              var fixed = fixUrl(url);
+              return oldReplace.call(this, state, title, fixed || url);
+            };
+          })();
+          </script>
+          `;
+
+          function walk(dir) {
+            if (!fs.existsSync(dir)) return;
+
+            for (const item of fs.readdirSync(dir)) {
+              const full = path.join(dir, item);
+              const stat = fs.statSync(full);
+
+              if (stat.isDirectory()) {
+                walk(full);
+              } else if (full.endsWith(".html")) {
+                let html = fs.readFileSync(full, "utf8");
+
+                if (!html.includes("__groceryRouteFix")) {
+                  if (html.includes("</head>")) {
+                    html = html.replace("</head>", script + "</head>");
+                  } else {
+                    html = script + html;
+                  }
+
+                  fs.writeFileSync(full, html);
+                  console.log("Injected route fixer:", full);
+                }
+              }
+            }
+          }
+
+          walk("out");
+          EOF
+
+          node inject-nav.cjs
+
+      - name: 11. تثبيت Capacitor وتجهيز Android
+        run: |
+          rm -f capacitor.config.json capacitor.config.ts
+
+          npm install @capacitor/core @capacitor/android @capacitor/cli --save-dev --legacy-peer-deps
+
+          cat > capacitor.config.json <<'EOF'
           {
-            "appId": "com.grocery.debtapp",
+            "appId": "com.grocery.debt",
             "appName": "Grocery Debt",
             "webDir": "out"
           }
           EOF
-          npm install --save --legacy-peer-deps @capacitor/core @capacitor/android @capacitor/cli
-          npx cap add android || true
+
+          npx cap add android
           npx cap sync android
 
-      # إصلاح تعارض مكتبات Kotlin
-      - name: Fix Kotlin Duplicate Dependencies
+      - name: 12. حل مشكلة Kotlin
         run: |
-          cat >> android/build.gradle << 'EOF'
+          cat >> android/build.gradle <<'EOF'
 
           allprojects {
               configurations.all {
@@ -523,17 +581,15 @@ jobs:
           }
           EOF
 
-      - name: Grant Gradle Permissions
+      - name: 13. إعطاء صلاحية Gradle
         run: chmod +x android/gradlew
 
-      # بناء ملف الـ APK
-      - name: Build APK with Gradle
+      - name: 14. بناء APK
         run: |
           cd android
           ./gradlew assembleDebug
 
-      # رفع وتجهيز التطبيق للتحميل
-      - name: Upload APK
+      - name: 15. رفع APK للتحميل
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
