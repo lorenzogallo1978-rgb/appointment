@@ -44,35 +44,53 @@ jobs:
           rm -rf src/app/api
           rm -rf app/api
 
-      - name: 8. إنشاء ملفات الـ Layout المساعدة مع إيقاف dynamicParams 🪄🛠️
+      - name: 8. فصل الصفحات التفاعلية عن دوال البناء تلقائياً 🪄✂️
         run: |
           node -e "
           const fs = require('fs');
           const path = require('path');
 
-          function patchDynamicRoutes(dir) {
+          function patchDynamicPages(dir) {
             if (!fs.existsSync(dir)) return;
             const files = fs.readdirSync(dir);
             files.forEach(file => {
               const fullPath = path.join(dir, file);
               if (fs.statSync(fullPath).isDirectory()) {
-                if (file.includes('[') && file.includes(']')) {
-                  console.log('تم العثور على مجلد ديناميكي:', fullPath);
-                  
-                  const layoutPath = path.join(fullPath, 'layout.tsx');
-                  // قمنا بتغيير dynamicParams إلى false لتوافق الهاتف تماماً!
-                  const layoutCode = 'export function generateStaticParams() { return []; }\nexport const dynamicParams = false;\n\nexport default function DynamicLayout({ children }: { children: any }) { return <>{children}</>; }\n';
-                  
-                  fs.writeFileSync(layoutPath, layoutCode);
-                  console.log('تم إنشاء layout.tsx بنجاح!');
+                patchDynamicPages(fullPath);
+              } else if (file.match(/^page\.(tsx|ts|js|jsx)$/)) {
+                // إذا كنا داخل مجلد ديناميكي يحتوي على [ ]
+                if (fullPath.includes('[') && fullPath.includes(']')) {
+                  console.log('جاري فحص وتعديل الصفحة الديناميكية:', fullPath);
+                  const content = fs.readFileSync(fullPath, 'utf8');
+
+                  // إذا كانت الصفحة تفاعلية وتحتوي على 'use client'
+                  if (content.includes('\"use client\"') || content.includes('\'use client\'')) {
+                    const dirPath = path.dirname(fullPath);
+                    const ext = path.extname(file);
+                    const clientPagePath = path.join(dirPath, 'ClientPage' + ext);
+
+                    // 1. نقل الكود الأصلي لملف ClientPage
+                    fs.renameSync(fullPath, clientPagePath);
+
+                    // 2. إنشاء الملف الموزع الجديد المتوافق مع قوانين البناء
+                    const wrapperCode = 'import ClientPage from \"./ClientPage\";\n\nexport function generateStaticParams() { return []; }\nexport const dynamicParams = false;\n\nexport default async function Page(props: any) { const params = await props.params; return <ClientPage params={params} />; }\n';
+                    fs.writeFileSync(fullPath, wrapperCode);
+                    console.log('تم فصل وتجهيز الصفحة التفاعلية بنجاح في مجلد:', dirPath);
+                  } else {
+                    // إذا كانت صفحة سيرفر عادية، ندمج الدالة في أسفلها فقط
+                    if (!content.includes('generateStaticParams')) {
+                      const appendCode = '\nexport function generateStaticParams() { return []; }\nexport const dynamicParams = false;\n';
+                      fs.appendFileSync(fullPath, appendCode);
+                      console.log('تم دمج الدالة لصفحة السيرفر العادية:', fullPath);
+                    }
+                  }
                 }
-                patchDynamicRoutes(fullPath);
               }
             });
           }
 
-          patchDynamicRoutes('src/app');
-          patchDynamicRoutes('app');
+          patchDynamicPages('src/app');
+          patchDynamicPages('app');
           "
 
       - name: 9. بناء ملفات الويب الثابتة (out)
